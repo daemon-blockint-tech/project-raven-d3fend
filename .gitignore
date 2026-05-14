@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Training artifacts (gitignored per SKILL.md §8)
+skills/defender-lora-mlx/data/
+skills/defender-lora-mlx/bases/
+skills/defender-lora-mlx/out/
+skills/defender-lora-mlx/logs/
+
+# Local IDE
+.vscode/
+.idea/
+*.swp
+
+# Secrets — never commit
+*.key
+*.pem
+.env.local
+secrets/
