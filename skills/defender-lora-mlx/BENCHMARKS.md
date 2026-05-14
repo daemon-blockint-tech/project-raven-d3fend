@@ -215,3 +215,44 @@ These five benchmarks let the grant proposal say, concretely:
 - "All training data passes a defender-only validator that refuses to emit offensive payloads, msfconsole patterns, generated shellcode, or PoC-leak content."
 
 That is a concrete defender-only artifact with reproducible evaluation, which is exactly the bar the grant pillars in `positioning.md` were built around.
+
+## 11. Doctrine references baked into the L4 builder
+
+The L4 OSSF CVE builder (`scripts/data/build_l4_ossf_cve.py`) hard-codes two doctrine documents into its system prompts. These are not training data — they are the **grounding language** the model is trained to reproduce when it explains a fix.
+
+### 11.1 CISA Secure-by-Design and Secure-by-Default (April 2023)
+
+Source: [Shifting the Balance of Cybersecurity Risk: Principles and Approaches for Security-by-Design and -Default](https://www.cisa.gov/sites/default/files/2023-10/SecureByDesign_1025_508c.pdf) — CISA + NSA + FBI + ACSC + NCSC-UK + CCCS + BSI + NCSC-NL + CERT NZ + NCSC-NZ, TLP:CLEAR.
+
+Four load-bearing phrases from this document appear verbatim in the L4 templates and in the CWE → D3FEND mapping table:
+
+1. "Take ownership of improving the security outcomes of their customers."
+2. "Eliminate entire classes of vulnerabilities."
+3. "Secure defaults; insecure modes opt-in only."
+4. "Hardening guides, not loosening guides."
+
+Every `L4-secure_rewrite`, `L4-diff_explain`, `L4-cwe_mapping`, and `L4-review_checklist` sample must terminate at one of these tactics. That is the CDP 𝒯 oracle for L4: a defender rationale that cannot be paraphrased into an exploit recipe.
+
+### 11.2 Xint / Theori — "You Don't Need Mythos. You Need a System." (April 2026)
+
+Source: [Xint whitepaper by Theori](https://xint.io), authored Tim Becker (Senior Security Researcher) and Jeffrey Martin (VP of Product), April 2026.
+
+Load-bearing claim, used as Raven's positioning anchor for L6 (spirit-vs-letter) and for the grant narrative:
+
+> "The critical variable in AI vulnerability discovery is not the model alone. It is the structured system that decides where to look, validates that findings are real and exploitable, eliminates false positives, and delivers actionable remediation."
+
+Raven inverts this claim for the defender side: the critical variable in AI vulnerability remediation is not the model alone, it is the **CDP-grounded** structured system that decides which D3FEND artifact applies, validates that the patch realizes a Secure-by-Design tactic, and emits a ledger entry that future reviewers can replay. The Xint whitepaper documents the offensive-discovery side of this same architectural insight; Raven is the defender-side counterpart.
+
+Grant-narrative consequence: when the OpenAI Cybersecurity Grant reviewer asks "why train a model at all when Mythos exists?", the answer is not "we beat Mythos." The answer is "Mythos is the offensive instance of a category, and a CDP-grounded D3FEND-canonical defender model is the missing defender-side instance of the same category — and that category is what Theori, Xint, and Anthropic's own Frontier Red Team all argue is the actual product."
+
+### 11.3 MITRE D3FEND v1.0 OWL
+
+Source: [d3fend.ttl v1.0](https://d3fend.mitre.org/ontologies/d3fend.ttl), [MITRE D3FEND 1.0 release announcement](https://www.mitre.org/news-insights/news-release/mitre-launches-d3fend-10-milestone-cybersecurity-ontology).
+
+The L4 builder's `CWE_DEFEND_MAP` is conservative: every artifact name in the map (e.g. "Input Validation", "Memory Boundary Tracking", "Authorization Event Thresholding") corresponds to a real D3FEND defensive technique present in v1.0 OWL. The L1 builder (`build_l1_d3fend.py`) is the authoritative source for D3FEND IRIs; L4 uses friendly names but every name must round-trip through L1 SPARQL before publication.
+
+### 11.4 Anthropic — "AI for Cyber Defenders" (2025)
+
+Source: [red.anthropic.com/2025/ai-for-cyber-defenders](https://red.anthropic.com/2025/ai-for-cyber-defenders/).
+
+Used as the eval-shape reference for E2 (patch verification under sanitizer + test suite). Anthropic's Frontier Red Team established that this is the defender-task shape that distinguishes real remediation capability from pattern-matching. Raven adopts it without modification.
