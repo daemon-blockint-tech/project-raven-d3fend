@@ -256,3 +256,71 @@ The L4 builder's `CWE_DEFEND_MAP` is conservative: every artifact name in the ma
 Source: [red.anthropic.com/2025/ai-for-cyber-defenders](https://red.anthropic.com/2025/ai-for-cyber-defenders/).
 
 Used as the eval-shape reference for E2 (patch verification under sanitizer + test suite). Anthropic's Frontier Red Team established that this is the defender-task shape that distinguishes real remediation capability from pattern-matching. Raven adopts it without modification.
+
+## 12. OpenCode Bench — E8: secure coding agent evaluation
+
+Source: [anomalyco/opencode-bench](https://github.com/anomalyco/opencode-bench) (no SPDX license declared; README + results.json publicly published). Author Anomaly Co.
+
+OpenCode Bench evaluates AI coding agents on real-world GitHub repositories by running the agent against a baseline commit, scoring outputs against a later production commit. Each evaluation is a 3-episode isolated run with multi-judge scoring across 5 dimensions:
+
+| Dimension | Weight | What it measures |
+|---|---|---|
+| API Signature | 20% | Function signatures match expected interfaces |
+| Logic Equivalence | 30% | Conditional logic produces equivalent outcomes |
+| Integration Points | 20% | External calls maintain correct order and arguments |
+| Test Coverage | 20% | Adequate test coverage and quality |
+| Checks | 10% | Passes linting, tests, and build processes |
+
+### Why it fits Raven
+
+A defender-only model that is also expected to write secure replacement code must demonstrate that its rewrites do not regress functionality. OpenCode Bench's scoring is exactly aligned: a Raven L4 secure-rewrite that breaks API signatures, changes logic semantics, or fails test coverage is not a usable defender output. This complements E2 (patch clean rate) by adding behavior preservation as an explicit scored dimension.
+
+### Honest caveats
+
+- The benchmark uses LLM judges (Claude 4.5, GPT-5 Codex, Kimi) which have variance; the upstream `benchmark-observations.md` documents instability between judges and offers stabilization recommendations (deterministic AST-based scorers, mechanical exit-code checks). When citing E8 numbers we will report 3-episode mean and standard deviation, not single-run scores.
+- The repo has no SPDX license declared. We use the published README + results.json under fair use as a methodology reference; we do not redistribute the benchmark code in our training data. If we run the benchmark we cite the upstream repo and methodology page.
+- Raven is a 7B model running locally; comparing it head-to-head with Sonnet 4.5 / GPT-5 Codex on this benchmark is informative for capability bounds, not for production parity. The honest framing in the eval report is "Raven achieves X% on OpenCode Bench at 7B / Apple Silicon, vs Y% for Sonnet 4.5 at frontier scale".
+
+### E8 eval design
+
+| Field | Value |
+|---|---|
+| Source | OpenCode Bench, 5-10 evals on permissively-licensed Python/TypeScript repos |
+| Episodes | 3 isolated runs per eval, mean and stdev reported |
+| Judges | Claude 4.5, GPT-5 Codex, Kimi (or substitute open-weights judges if API budget constrains) |
+| Pass criterion | Overall weighted score >= 0.40 (Raven baseline target); >= 0.60 stretch target |
+| Honest framing | This evaluates secure-coding agent capability at 7B scale, not frontier parity |
+| CDP terminator | tau: per-dimension judge score, model: 3-judge mean, ledger: episode-level diff hashes |
+
+### Builder/runner
+
+Deferred: `scripts/eval/run_opencode_bench.py` will be a thin wrapper that invokes `orvl opencode --model lmstudio/raven-d3fend-defender-7b-v1 --eval <owner/repo>` after Raven is exported to GGUF and served via LM Studio's OpenAI-compatible endpoint. Build this after the SFT+DPO run completes.
+
+## 13. models.dev registry — positioning, not benchmark
+
+Source: [models.dev](https://models.dev/) + [anomalyco/models.dev](https://github.com/anomalyco/models.dev) (MIT, 3.7k stars).
+
+models.dev is the canonical open registry of LLM provider catalogs (50+ providers, see `MODELS_REGISTRY.md` for the full list and Raven's proposed entry). This is **not a benchmark**; it is a positioning and comparison artifact for the grant narrative.
+
+### Use in Raven
+
+1. Documents the base model (Qwen2.5-7B-Instruct, open weights, Alibaba) in a citable third-party registry, so the grant reviewer can verify base-model claims without trusting our README.
+2. Provides the comparator pricing/capability table cited in `MODELS_REGISTRY.md` for the honest competitive framing ("Raven is not a frontier model; it occupies the open-weights defender-only locally-deployable category").
+3. After v1 release, we submit a pull request to anomalyco/models.dev adding the Raven entry. The PR itself is a piece of evidence for the grant: the model is publicly cataloged in a registry maintained by a third party.
+
+See `MODELS_REGISTRY.md` in this directory for the full integration spec.
+
+## 14. Updated eval matrix (overrides Section 7)
+
+| Eval | Source | Pass criterion | Grounding |
+|---|---|---|---|
+| E1 | D3FEND mapping accuracy on 300 held-out CVEs | top-3 recall >= 0.75 | tau: OWL |
+| E2 | OSSF CVE Benchmark held-out + CyberGym patch-mode | >= 0.80 patches clean and tests pass | tau: SAST + tests |
+| E3 | Refusal precision/recall, 200 jailbreak + 200 lookalike | precision >= 0.95, recall on legit >= 0.95 | model: refusal classifier |
+| E4 | Spirit-vs-letter 150 ambiguous defender requests | spirit-correct >= 0.80 (above [XBOW Mythos 0.778](https://xbow.com/blog/mythos-offensive-security-xbow-evaluation)) | tau: rubric |
+| E5 | CDP termination on 500 generated responses | >= 0.90 terminate at tau/model/ledger | tau: parser |
+| E6 | Trident Arena 6 Solana protocols | >= 11/30 base, >= 15/30 with sub-skill | tau: professional audit gold |
+| E7 | Wake Arena 14 Solidity protocols | >= 24/94 base, >= 40/94 with sub-skill | tau: Code4rena/Sherlock |
+| **E8** | **OpenCode Bench 5-10 permissive repos** | **overall weighted >= 0.40 base, >= 0.60 stretch** | **tau: 5-dim judge mean** |
+
+E8 is the newest eval; it measures Raven's behavior-preserving code-rewrite capability, which is the missing dimension when E2 only verifies sanitizer cleanliness.
