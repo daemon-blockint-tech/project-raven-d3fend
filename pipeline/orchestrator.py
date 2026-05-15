@@ -5,27 +5,25 @@ import os
 import sys
 import logging
 import yaml
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 from datetime import datetime
 
-# Add pipeline directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from openrouter_integration.client import OpenRouterClient
-from openrouter_integration.model_selector import ModelSelector
-from openrouter_integration.cost_tracker import CostTracker
-from models import (
+from .openrouter_integration.client import OpenRouterClient
+from .openrouter_integration.model_selector import ModelSelector
+from .openrouter_integration.cost_tracker import CostTracker
+from .models import (
     SurfaceMap, ThreatModel, CandidateFinding, ValidatedFinding,
     DeduplicatedFinding, ProvenFinding, FinalFinding, PipelineReport
 )
-from prepare import CodebaseIngester, LanguageIndexer, ThreatModeler, GitAnalyzer
-from scan import AgentRouter, FindingCollector
-from validate import DebateOrchestrator
-from dedup import EmbeddingGenerator, SimilarityCalculator, ClusteringEngine, FindingMerger
-from prove import PoCGenerator, HarnessBuilder, Fuzzer, SandboxManager, SanitizerRunner
-from d3fend import CWEMapper, D3FENDOntologyClient, RemediationEngine
-from feedback.feedback_agent import RetrospectiveFeedbackAgent
+from .prepare import CodebaseIngester, LanguageIndexer, ThreatModeler, GitAnalyzer
+from .scan import AgentRouter, FindingCollector
+from .validate import DebateOrchestrator
+from .dedup import EmbeddingGenerator, SimilarityCalculator, ClusteringEngine, FindingMerger
+from .prove import PoCGenerator, HarnessBuilder, Fuzzer, SandboxManager, SanitizerRunner
+from .d3fend import CWEMapper, D3FENDOntologyClient, RemediationEngine
+from .threat_intel import ShodanClient
+from .feedback.feedback_agent import RetrospectiveFeedbackAgent
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +71,7 @@ class PipelineOrchestrator:
         self.prepare_threat_modeler = ThreatModeler(
             self.openrouter_client,
             self.model_selector,
-            self.config["pipeline"]["prepare"]
+            self.config["pipeline"]["stages"]["prepare"]
         )
         self.prepare_git_analyzer = GitAnalyzer()
         
@@ -81,7 +79,7 @@ class PipelineOrchestrator:
             self.openrouter_client,
             self.model_selector,
             self.cost_tracker,
-            self.config["pipeline"]["scan"]
+            self.config["pipeline"]["stages"]["scan"]
         )
         self.scan_finding_collector = FindingCollector()
         
@@ -89,23 +87,23 @@ class PipelineOrchestrator:
             self.openrouter_client,
             self.model_selector,
             self.cost_tracker,
-            self.config["pipeline"]["validate"]
+            self.config["pipeline"]["stages"]["validate"]
         )
         
         self.dedup_embedding_generator = EmbeddingGenerator(
             self.openrouter_client,
             self.model_selector,
             self.cost_tracker,
-            self.config["pipeline"]["dedup"]
+            self.config["pipeline"]["stages"]["dedup"]
         )
         self.dedup_similarity = SimilarityCalculator(
-            self.config["pipeline"]["dedup"]["similarity_threshold"]
+            self.config["pipeline"]["stages"]["dedup"]["similarity_threshold"]
         )
         self.dedup_clustering = ClusteringEngine(
-            self.config["pipeline"]["dedup"]["clustering_algorithm"],
-            self.config["pipeline"]["dedup"]["eps"],
-            self.config["pipeline"]["dedup"]["min_samples"],
-            self.config["pipeline"]["dedup"]["similarity_threshold"]
+            self.config["pipeline"]["stages"]["dedup"]["clustering_algorithm"],
+            self.config["pipeline"]["stages"]["dedup"]["eps"],
+            self.config["pipeline"]["stages"]["dedup"]["min_samples"],
+            self.config["pipeline"]["stages"]["dedup"]["similarity_threshold"]
         )
         self.dedup_merger = FindingMerger()
         
@@ -113,7 +111,7 @@ class PipelineOrchestrator:
             self.openrouter_client,
             self.model_selector,
             self.cost_tracker,
-            self.config["pipeline"]["prove"]
+            self.config["pipeline"]["stages"]["prove"]
         )
         self.prove_harness_builder = HarnessBuilder()
         self.prove_fuzzer = Fuzzer()
@@ -128,6 +126,9 @@ class PipelineOrchestrator:
             self.cost_tracker,
             self.config.get("d3fend", {})
         )
+        
+        # Initialize Shodan threat intel for network-facing targets
+        self.shodan_client = ShodanClient()
         
         # Initialize feedback loop
         self.feedback_enabled = feedback_enabled
@@ -169,10 +170,10 @@ class PipelineOrchestrator:
                 ingestion = self.prepare_ingester.ingest_from_local(target)
             
             # Build language index
-            language_index = self.prepare_indexer.build_index(inggestion["local_path"])
+            language_index = self.prepare_indexer.build_index(ingestion["local_path"])
             
             # Analyze git history
-            git_analysis = self.prepare_git_analyzer.analyze_history(inggestion["local_path"])
+            git_analysis = self.prepare_git_analyzer.analyze_history(ingestion["local_path"])
             
             # Generate surface map
             surface_map = SurfaceMap(
@@ -280,6 +281,11 @@ class PipelineOrchestrator:
         self.cost_tracker.start_stage("prove")
         
         proven_findings = []
+        network_facing_targets = {
+            "live-host",
+            "network-range-own-assets",
+        }
+        is_network_facing = target_type in network_facing_targets
         
         try:
             for dedup_finding in deduplicated_findings:
@@ -288,6 +294,26 @@ class PipelineOrchestrator:
                     dedup_finding,
                     language="python"  # TODO: detect from target_type
                 )
+                
+                # Assess external exposure via Shodan for network-facing targets
+                shodan_exposure = None
+                if is_network_facing and self.shodan_client.is_available():
+                    try:
+                        finding_dict = {
+                            "id": dedup_finding.id,
+                            "cwe_id": dedup_finding.representative_finding.original_candidate.cwe_id or "",
+                            "bug_class": dedup_finding.representative_finding.original_candidate.bug_class.value,
+                            "location": dedup_finding.representative_finding.original_candidate.location,
+                        }
+                        shodan_exposure = self.shodan_client.assess_finding_exposure(finding_dict)
+                        logger.info(
+                            "Shodan exposure for %s: score=%.1f, hosts=%d",
+                            dedup_finding.id,
+                            shodan_exposure.exposure_score,
+                            shodan_exposure.total_count,
+                        )
+                    except Exception as exc:
+                        logger.warning("Shodan exposure assessment failed for %s: %s", dedup_finding.id, exc)
                 
                 # For now, mark as unproven since we're not actually executing
                 # In production, this would run the PoC in sandbox
@@ -299,6 +325,19 @@ class PipelineOrchestrator:
                     sanitizer_results={},
                     grounding_type=dedup_finding.representative_finding.grounding_type
                 )
+                
+                # Attach Shodan exposure data if available
+                if shodan_exposure:
+                    proven_finding.poc_artifacts["shodan_exposure"] = {
+                        "internet_exposed": shodan_exposure.internet_exposed,
+                        "host_count": shodan_exposure.host_count,
+                        "total_count": shodan_exposure.total_count,
+                        "exposure_score": shodan_exposure.exposure_score,
+                        "exposed_services": shodan_exposure.exposed_services,
+                        "countries": shodan_exposure.countries,
+                        "orgs": shodan_exposure.orgs,
+                        "vulns_matched": shodan_exposure.vulns_matched,
+                    }
                 
                 proven_findings.append(proven_finding)
             

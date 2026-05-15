@@ -89,20 +89,21 @@ class EnricherAgent:
         if self.shodan and self.shodan.is_available():
             try:
                 shodan_result = self.shodan.assess_finding_exposure(finding)
+                shodan_data = {
+                    "internet_exposed": shodan_result.internet_exposed,
+                    "host_count": shodan_result.host_count,
+                    "total_count": shodan_result.total_count,
+                    "exposed_services": shodan_result.exposed_services,
+                    "countries": shodan_result.countries,
+                    "orgs": shodan_result.orgs,
+                    "vulns_matched": shodan_result.vulns_matched,
+                    "exposure_score": shodan_result.exposure_score,
+                }
+                # Boost internal exposure score with Shodan data when exposed
                 if shodan_result.internet_exposed:
-                    shodan_data = {
-                        "internet_exposed": True,
-                        "host_count": shodan_result.host_count,
-                        "exposed_services": shodan_result.exposed_services,
-                        "countries": shodan_result.countries,
-                        "orgs": shodan_result.orgs,
-                        "vulns_matched": shodan_result.vulns_matched,
-                        "exposure_score": shodan_result.exposure_score,
-                    }
-                    # Boost internal exposure score with Shodan data
-                    exposure = min(100, (exposure + shodan_result.exposure_score) / 2)
+                    exposure = min(100.0, (exposure + shodan_result.exposure_score) / 2)
             except Exception as e:
-                logger.warning(f"Shodan assessment failed: {e}")
+                logger.warning("Shodan assessment failed: %s", e)
 
         # Compliance mapping
         compliance = self._map_compliance(d3fend)
@@ -160,14 +161,43 @@ class EnricherAgent:
             narrative=narrative,
         )
 
+        shodan_log = f", shodan_hosts={shodan_data['host_count']}" if shodan_data else ""
+        compliance_log = f", compliance={len(compliance_mappings)}" if compliance_mappings else ""
         logger.info(
-            f"Enriched {finding_id}: D3FEND={len(d3fend)}, "
-            f"ATT&CK={len(attack)}, ACF={len(acf)}, "
-            f"exposure={exposure:.1f}"
-            f"{', shodan_hosts=' + str(shodan_data['host_count']) if shodan_data else ''}"
-            f"{', compliance=' + str(len(compliance_mappings)) if compliance_mappings else ''}"
+            "Enriched %s: D3FEND=%d, ATT&CK=%d, ACF=%d, exposure=%.1f%s%s",
+            finding_id,
+            len(d3fend),
+            len(attack),
+            len(acf),
+            exposure,
+            shodan_log,
+            compliance_log,
         )
         return result
+
+    def _map_to_acf(self, bug_class: str, d3fend_ids: List[str]) -> List[str]:
+        """Map bug class to D3FEND ACF analytic techniques."""
+        # ACF (Analytic Characterization Framework) mapping
+        # Maps bug classes to recommended analytic detection methods
+        mappings = {
+            "buffer-overflow": ["pattern-matching", "static-analysis", "sanitizer"],
+            "use-after-free": ["static-analysis", "sanitizer", "taint-analysis"],
+            "race-condition": ["static-analysis", "dynamic-analysis", "sanitizer"],
+            "auth-bypass": ["pattern-matching", "static-analysis", "access-control-audit"],
+            "integer-overflow": ["static-analysis", "sanitizer", "symbolic-execution"],
+            "deserialization": ["static-analysis", "pattern-matching", "taint-analysis"],
+            "type-confusion": ["static-analysis", "type-checking", "sanitizer"],
+            "sql-injection": ["pattern-matching", "static-analysis", "taint-analysis"],
+            "xss": ["pattern-matching", "static-analysis", "taint-analysis"],
+            "path-traversal": ["pattern-matching", "static-analysis", "access-control-audit"],
+            "reentrancy": ["static-analysis", "symbolic-execution", "formal-verification"],
+            "oracle-manipulation": ["static-analysis", "data-flow-analysis", "formal-verification"],
+            "account-confusion": ["static-analysis", "access-control-audit", "pattern-matching"],
+            "arithmetic-overflow": ["static-analysis", "sanitizer", "symbolic-execution"],
+            "irp-flaw": ["static-analysis", "pattern-matching", "formal-verification"],
+            "vm-escape": ["static-analysis", "formal-verification", "access-control-audit"],
+        }
+        return mappings.get(bug_class, ["static-analysis", "pattern-matching"])
 
     def _map_to_d3fend(self, bug_class: str, cwe: Optional[str]) -> List[str]:
         """Map bug class to D3FEND defensive techniques."""

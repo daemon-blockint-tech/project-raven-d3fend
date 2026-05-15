@@ -4,17 +4,37 @@ Shodan Integration for External Exposure Scoring
 Integrates the Shodan search engine to discover internet-facing assets
 and assess external exposure of vulnerabilities found by Raven.
 
+Patterns adopted from the official shodan-python SDK (v1.31.0):
+    - requests.Session reuse for connection pooling
+    - Rate-limit guard to respect API limits (1 req/sec by default)
+    - count() for fast aggregate exposure scale without full enumeration
+    - search_cursor() generator for auto-pagination
+    - Proper APIError hierarchy for upstream exception handling
+    - info() key validation on init
+    - Bulk host() lookups (multi-IP)
+
 Usage:
     client = ShodanClient(api_key=os.getenv("SHODAN_API_KEY"))
     exposure = client.assess_finding_exposure(finding)
 """
 import logging
+import math
 import os
+import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Any
+from typing import Dict, Generator, List, Optional, Any
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+
+class ShodanAPIError(Exception):
+    """Raised when the Shodan API returns a non-200 status or an error response."""
+    def __init__(self, value: str):
+        self.value = value
+
+    def __str__(self) -> str:
+        return self.value
 
 
 @dataclass
@@ -23,6 +43,7 @@ class ShodanExposureResult:
     finding_id: str
     internet_exposed: bool
     host_count: int
+    total_count: int  # Full count via count(), not just returned matches
     exposed_services: List[str]
     countries: List[str]
     orgs: List[str]
@@ -38,37 +59,101 @@ class ShodanClient:
     Shodan API client for Raven's threat intelligence layer.
 
     Provides:
-    - Host lookup by IP/domain
-    - Service search for exposed vulnerabilities
+    - Host lookup by IP/domain (single and bulk)
+    - Service / CVE search for exposed vulnerabilities
+    - count() for fast aggregate exposure scale
+    - search_cursor() generator for paginated enumeration
     - Exposure scoring based on internet-facing assets
+    - Rate-limited, session-pooled API calls
     """
 
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.getenv("SHODAN_API_KEY")
         self._shodan = None
         self._available = False
+        self._api_info: Optional[Dict[str, Any]] = None
+        self.api_rate_limit = 1  # Requests per second (configurable)
+        self._api_query_time: Optional[float] = None
 
         if self.api_key:
             try:
                 import shodan
                 self._shodan = shodan.Shodan(self.api_key)
                 self._available = True
-                logger.info("Shodan client initialized")
+                # Validate key and surface plan info
+                try:
+                    self._api_info = self.info()
+                    plan = self._api_info.get("plan", "unknown")
+                    query_credits = self._api_info.get("query_credits", 0)
+                    logger.info(
+                        "Shodan client initialized: plan=%s, query_credits=%s",
+                        plan,
+                        query_credits,
+                    )
+                except ShodanAPIError as exc:
+                    logger.warning("Shodan key validation failed: %s", exc)
+                    self._available = False
             except ImportError:
                 logger.warning(
                     "shodan package not installed. "
                     "Install with: pip install shodan"
                 )
-            except Exception as e:
-                logger.error(f"Shodan init failed: {e}")
+            except Exception as exc:
+                logger.error("Shodan init failed: %s", exc)
         else:
             logger.warning(
                 "SHODAN_API_KEY not set. Shodan integration disabled."
             )
 
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _rate_limit(self) -> None:
+        """Respect Shodan's API rate limit (default 1 req/sec)."""
+        if self._api_query_time is not None and self.api_rate_limit > 0:
+            min_interval = 1.0 / self.api_rate_limit
+            while min_interval + self._api_query_time >= time.time():
+                time.sleep(0.1 / self.api_rate_limit)
+
+    def _mark_query(self) -> None:
+        """Record the time of the last API query for rate-limit tracking."""
+        self._api_query_time = time.time()
+
+    def _wrap_api_call(self, fn, *args, **kwargs):
+        """Execute a Shodan SDK call with rate limiting and ShodanAPIError translation."""
+        if not self.is_available():
+            raise ShodanAPIError("Shodan client is not available")
+        self._rate_limit()
+        try:
+            result = fn(*args, **kwargs)
+            self._mark_query()
+            return result
+        except Exception as exc:
+            # Translate known SDK exception types
+            msg = str(exc)
+            if "Invalid API key" in msg or "401" in msg:
+                raise ShodanAPIError(f"Invalid API key: {msg}")
+            if "Access denied" in msg or "403" in msg:
+                raise ShodanAPIError(f"Access denied: {msg}")
+            if "Bad Gateway" in msg or "502" in msg:
+                raise ShodanAPIError(f"Shodan service unavailable: {msg}")
+            raise ShodanAPIError(msg)
+
+    # ------------------------------------------------------------------
+    # Public API (mirrors official SDK where useful)
+    # ------------------------------------------------------------------
+
     def is_available(self) -> bool:
         """Check if Shodan API is available and initialized."""
         return self._available and self._shodan is not None
+
+    def info(self) -> Dict[str, Any]:
+        """
+        Return API-key metadata: plan, query_credits, scan_credits, etc.
+        Raises ShodanAPIError on failure.
+        """
+        return self._wrap_api_call(self._shodan.info)
 
     def lookup_host(self, ip: str) -> Optional[Dict[str, Any]]:
         """
@@ -80,20 +165,135 @@ class ShodanClient:
         Returns:
             Host data dict or None if unavailable/error
         """
-        if not self.is_available():
+        try:
+            return self._wrap_api_call(self._shodan.host, ip)
+        except ShodanAPIError as exc:
+            logger.warning("Shodan host lookup failed for %s: %s", ip, exc)
             return None
 
+    def bulk_lookup(self, ips: List[str]) -> Dict[str, Any]:
+        """
+        Look up multiple hosts in a single API call.
+
+        Args:
+            ips: List of IP addresses
+
+        Returns:
+            Host data dict (contains multiple hosts under the 'data' key)
+        """
+        if not ips:
+            return {}
         try:
-            return self._shodan.host(ip)
-        except Exception as e:
-            logger.warning(f"Shodan host lookup failed for {ip}: {e}")
-            return None
+            return self._wrap_api_call(self._shodan.host, ips)
+        except ShodanAPIError as exc:
+            logger.warning("Shodan bulk lookup failed for %s: %s", ips, exc)
+            return {}
+
+    def count(self, query: str, facets: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Fast aggregate query: returns total result count + optional facet breakdown.
+
+        Args:
+            query: Shodan search query
+            facets: Optional list of properties for summary aggregation
+
+        Returns:
+            Dict with 'total' and optional 'facets'
+        """
+        return self._wrap_api_call(self._shodan.count, query, facets=facets)
+
+    def search(
+        self,
+        query: str,
+        limit: Optional[int] = None,
+        facets: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Search the Shodan database.
+
+        Args:
+            query: Shodan search query
+            limit: Maximum results to return (defaults to SDK default)
+            facets: Optional list of properties for summary aggregation
+
+        Returns:
+            Dict with 'matches', 'total', and optional 'facets'
+        """
+        kwargs: Dict[str, Any] = {}
+        if limit is not None:
+            kwargs["limit"] = limit
+        if facets is not None:
+            kwargs["facets"] = facets
+        return self._wrap_api_call(self._shodan.search, query, **kwargs)
+
+    def search_cursor(
+        self,
+        query: str,
+    ) -> Generator[Dict[str, Any], None, None]:
+        """
+        Generator that auto-pages through all results for a query.
+
+        Yields each banner/match dict individually.  Use this when you
+        need to enumerate the full result set without manually handling
+        pagination.
+
+        Args:
+            query: Shodan search query
+
+        Yields:
+            Individual match dictionaries
+        """
+        if not self.is_available():
+            return
+
+        page = 1
+        total_pages = 0
+        tries = 0
+        max_retries = 5
+
+        try:
+            self._rate_limit()
+            results = self._shodan.search(query, page=page)
+            self._mark_query()
+        except Exception as exc:
+            logger.warning("Shodan search_cursor initial page failed: %s", exc)
+            return
+
+        if results.get("total"):
+            total_pages = int(math.ceil(results["total"] / 100))
+
+        for banner in results.get("matches", []):
+            yield banner
+
+        page += 1
+
+        while page <= total_pages:
+            try:
+                self._rate_limit()
+                results = self._shodan.search(query, page=page)
+                self._mark_query()
+                for banner in results.get("matches", []):
+                    yield banner
+                page += 1
+                tries = 0
+            except Exception as exc:
+                if tries >= max_retries:
+                    logger.warning(
+                        "Shodan search_cursor retry limit reached (%d): %s",
+                        max_retries,
+                        exc,
+                    )
+                    raise ShodanAPIError(
+                        f"Retry limit reached ({max_retries}): {exc}"
+                    )
+                tries += 1
+                time.sleep(tries)
 
     def search_vulnerability(
         self,
         cve_id: str,
         port: Optional[int] = None,
-        limit: int = 100
+        limit: int = 100,
     ) -> List[Dict[str, Any]]:
         """
         Search Shodan for hosts vulnerable to a specific CVE.
@@ -114,17 +314,17 @@ class ShodanClient:
             query += f" port:{port}"
 
         try:
-            results = self._shodan.search(query, limit=limit)
+            results = self.search(query, limit=limit)
             return list(results.get("matches", []))
-        except Exception as e:
-            logger.warning(f"Shodan search failed for {cve_id}: {e}")
+        except ShodanAPIError as exc:
+            logger.warning("Shodan search failed for %s: %s", cve_id, exc)
             return []
 
     def search_service(
         self,
         service_name: str,
         version: Optional[str] = None,
-        limit: int = 100
+        limit: int = 100,
     ) -> List[Dict[str, Any]]:
         """
         Search for exposed services (e.g., "apache", "nginx", "mongodb").
@@ -145,23 +345,27 @@ class ShodanClient:
             query += f" version:{version}"
 
         try:
-            results = self._shodan.search(query, limit=limit)
+            results = self.search(query, limit=limit)
             return list(results.get("matches", []))
-        except Exception as e:
-            logger.warning(f"Shodan search failed for {service_name}: {e}")
+        except ShodanAPIError as exc:
+            logger.warning("Shodan search failed for %s: %s", service_name, exc)
             return []
+
+    # ------------------------------------------------------------------
+    # Raven-specific exposure assessment
+    # ------------------------------------------------------------------
 
     def assess_finding_exposure(
         self,
         finding: Dict[str, Any],
         search_vulns: bool = True,
-        search_services: bool = True
+        search_services: bool = True,
     ) -> ShodanExposureResult:
         """
         Assess the external exposure of a finding using Shodan.
 
-        Combines vulnerability search and service search to determine
-        how exposed the finding is on the public internet.
+        Uses count() for fast aggregate scale checks, then enumerates
+        a sample of matches for metadata (services, countries, orgs).
 
         Args:
             finding: Finding dict with at minimum:
@@ -183,22 +387,22 @@ class ShodanClient:
         bug_class = finding.get("bug_class", "")
         location = finding.get("location", "")
 
-        all_matches = []
-        exposed_services = set()
-        countries = set()
-        orgs = set()
-        tags = set()
-        vulns = set()
+        all_matches: List[Dict[str, Any]] = []
+        exposed_services: set = set()
+        countries: set = set()
+        orgs: set = set()
+        tags: set = set()
+        vulns: set = set()
+        total_count = 0
 
-        # Search by CVE if available
-        if search_vulns and cve_id and cve_id.startswith("CVE-"):
-            cve_matches = self.search_vulnerability(cve_id, limit=50)
-            for m in cve_matches:
-                all_matches.append(m)
+        # Helper to collect metadata from a list of matches
+        def _collect(matches: List[Dict[str, Any]]) -> None:
+            for m in matches:
                 if "product" in m:
                     exposed_services.add(m["product"])
-                if "location" in m and "country_name" in m["location"]:
-                    countries.add(m["location"]["country_name"])
+                loc = m.get("location", {})
+                if isinstance(loc, dict) and "country_name" in loc:
+                    countries.add(loc["country_name"])
                 if "org" in m:
                     orgs.add(m["org"])
                 if "tags" in m:
@@ -206,41 +410,56 @@ class ShodanClient:
                 if "vulns" in m:
                     vulns.update(m["vulns"])
 
+        # Search by CVE if available
+        if search_vulns and cve_id and cve_id.startswith("CVE-"):
+            query = f"vuln:{cve_id}"
+            try:
+                count_result = self.count(query)
+                total_count += count_result.get("total", 0)
+            except ShodanAPIError as exc:
+                logger.debug("Shodan count failed for %s: %s", cve_id, exc)
+
+            cve_matches = self.search_vulnerability(cve_id, limit=20)
+            all_matches.extend(cve_matches)
+            _collect(cve_matches)
+
         # Search by service name extracted from location
         if search_services and location:
             service_name = self._extract_service_name(location, bug_class)
             if service_name:
-                svc_matches = self.search_service(service_name, limit=50)
-                for m in svc_matches:
-                    all_matches.append(m)
-                    if "product" in m:
-                        exposed_services.add(m["product"])
-                    if "location" in m and "country_name" in m["location"]:
-                        countries.add(m["location"]["country_name"])
-                    if "org" in m:
-                        orgs.add(m["org"])
+                query = f"product:{service_name}"
+                try:
+                    count_result = self.count(query)
+                    total_count += count_result.get("total", 0)
+                except ShodanAPIError as exc:
+                    logger.debug("Shodan count failed for %s: %s", service_name, exc)
 
-        # Calculate exposure score
+                svc_matches = self.search_service(service_name, limit=20)
+                all_matches.extend(svc_matches)
+                _collect(svc_matches)
+
+        # Calculate exposure score using total_count (not just sample size)
         exposure_score = self._calculate_exposure_score(
-            len(all_matches),
+            total_count,
             len(exposed_services),
             len(countries),
             len(vulns),
-            bug_class
+            bug_class,
         )
 
         return ShodanExposureResult(
             finding_id=finding_id,
-            internet_exposed=len(all_matches) > 0,
+            internet_exposed=total_count > 0,
             host_count=len(all_matches),
+            total_count=total_count,
             exposed_services=sorted(list(exposed_services)),
             countries=sorted(list(countries)),
             orgs=sorted(list(orgs)),
-            last_seen=datetime.now().isoformat(),
+            last_seen=datetime.utcnow().isoformat(),
             tags=sorted(list(tags)),
             vulns_matched=sorted(list(vulns)),
             exposure_score=exposure_score,
-            raw_matches=all_matches[:10]  # Limit raw data
+            raw_matches=all_matches[:10],  # Limit raw data
         )
 
     def _extract_service_name(self, location: str, bug_class: str) -> Optional[str]:
@@ -336,6 +555,7 @@ class ShodanClient:
             finding_id=finding_id,
             internet_exposed=False,
             host_count=0,
+            total_count=0,
             exposed_services=[],
             countries=[],
             orgs=[],

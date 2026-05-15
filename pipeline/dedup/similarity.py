@@ -1,7 +1,7 @@
 """
 Similarity calculator for the Dedup stage - computes semantic similarity between findings.
 """
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity

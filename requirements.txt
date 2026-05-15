@@ -7,8 +7,8 @@ requests>=2.31.0
 # OpenRouter SDK for multi-model routing
 openrouter>=0.1.0
 
-# Optional: Shodan for external exposure scoring
-# shodan>=1.31.0
+# Shodan for external exposure scoring
+shodan>=1.31.0
 
 # Optional: ML Detector (𝓜) — CodeBERT-based vulnerability classification
 # transformers>=4.35.0

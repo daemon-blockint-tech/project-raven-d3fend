@@ -99,6 +99,13 @@ class AgentPool:
 
             logger.debug(f"Spawned {defn.agent_id}: {defn.name} (model={model_id})")
 
+    def _has_budget(self, instance: AgentInstance) -> bool:
+        """Check if an agent's model has remaining budget."""
+        cfg = self.model_router.models.get(instance.agent.model)
+        if not cfg:
+            return True  # Unknown model, allow by default
+        return self.model_router._can_afford(cfg)
+
     def get_agent(self, agent_id: str) -> Optional[AgentInstance]:
         """Get an agent instance by ID."""
         return self._agents.get(agent_id)
@@ -141,9 +148,7 @@ class AgentPool:
         # Filter active agents with budget remaining
         candidates = [
             c for c in candidates
-            if c.active and self.model_router._can_afford(
-                self.model_router.models.get(c.agent.model, None)
-            )
+            if c.active and self._has_budget(c)
         ]
 
         if not candidates:

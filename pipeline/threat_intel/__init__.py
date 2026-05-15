@@ -12,7 +12,7 @@ from .onchain_threat_intel import (
     ThreatSource,
     ExposureMetric
 )
-from .shodan_client import ShodanClient, ShodanExposureResult
+from .shodan_client import ShodanClient, ShodanExposureResult, ShodanAPIError
 
 __all__ = [
     'OnChainThreatIntelLayer',
@@ -22,4 +22,5 @@ __all__ = [
     'ExposureMetric',
     'ShodanClient',
     'ShodanExposureResult',
+    'ShodanAPIError',
 ]

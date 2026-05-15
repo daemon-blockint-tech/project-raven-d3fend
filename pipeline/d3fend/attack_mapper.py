@@ -112,6 +112,81 @@ class ATTACKMapper:
                 "name": "Active Scanning",
                 "tactic": "Reconnaissance",
                 "description": "Adversaries may execute active scans to identify vulnerable services and endpoints."
+            },
+            "T1552.004": {
+                "name": "Steal or Forge Authentication Certificates",
+                "tactic": "Credential Access",
+                "description": "Adversaries may steal or forge authentication certificates to gain access to systems or services."
+            },
+            "T1087.001": {
+                "name": "Local Account",
+                "tactic": "Discovery",
+                "description": "Adversaries may attempt to get a listing of local system accounts."
+            },
+            "T1087.002": {
+                "name": "Domain Account",
+                "tactic": "Discovery",
+                "description": "Adversaries may attempt to get a listing of domain accounts."
+            },
+            "T1087.004": {
+                "name": "Cloud Account",
+                "tactic": "Discovery",
+                "description": "Adversaries may attempt to get a listing of cloud accounts."
+            },
+            "T1078.001": {
+                "name": "Default Accounts",
+                "tactic": "Defense Evasion",
+                "description": "Adversaries may obtain and abuse credentials of a default account."
+            },
+            "T1078.002": {
+                "name": "Domain Accounts",
+                "tactic": "Defense Evasion",
+                "description": "Adversaries may obtain and abuse credentials of a domain account."
+            },
+            "T1078.003": {
+                "name": "Local Accounts",
+                "tactic": "Defense Evasion",
+                "description": "Adversaries may obtain and abuse credentials of a local account."
+            },
+            "T1078.004": {
+                "name": "Cloud Accounts",
+                "tactic": "Defense Evasion",
+                "description": "Adversaries may obtain and abuse credentials of a cloud account."
+            },
+            "T1098.002": {
+                "name": "Additional Email Delegate Permissions",
+                "tactic": "Persistence",
+                "description": "Adversaries may grant additional permission delegation capabilities to an account."
+            },
+            "T1098.003": {
+                "name": "Additional Cloud Roles",
+                "tactic": "Persistence",
+                "description": "Adversaries may add additional roles or permissions to an account."
+            },
+            "T1136.001": {
+                "name": "Local Account",
+                "tactic": "Persistence",
+                "description": "Adversaries may create a local account to maintain access to victim systems."
+            },
+            "T1136.002": {
+                "name": "Domain Account",
+                "tactic": "Persistence",
+                "description": "Adversaries may create a domain account to maintain access to victim systems."
+            },
+            "T1136.003": {
+                "name": "Cloud Account",
+                "tactic": "Persistence",
+                "description": "Adversaries may create a cloud account to maintain access to victim systems."
+            },
+            "T1548.005": {
+                "name": "Temporary Elevated Cloud Access",
+                "tactic": "Privilege Escalation",
+                "description": "Adversaries may temporarily elevate their access using cloud-specific mechanisms."
+            },
+            "T1189": {
+                "name": "Drive-by Compromise",
+                "tactic": "Initial Access",
+                "description": "Adversaries may gain access to a system through a user visiting a compromised website."
             }
         }
 
@@ -161,6 +236,12 @@ class ATTACKMapper:
             "CWE-416": ["T1203", "T1068"],
             "CWE-772": ["T1499", "T1496"],
             "CWE-835": ["T1499", "T1496"],
+            "CWE-295": ["T1552.004", "T1550", "T1078"],
+            "CWE-296": ["T1078", "T1550", "T1552.004"],
+            "CWE-297": ["T1078", "T1552.004", "T1190"],
+            "CWE-326": ["T1552.004", "T1040", "T1550"],
+            "CWE-523": ["T1552.004", "T1078", "T1098"],
+            "CWE-649": ["T1552.004", "T1550", "T1078"],
         }
 
     def get_technique(self, technique_id: str) -> Optional[Dict[str, Any]]:

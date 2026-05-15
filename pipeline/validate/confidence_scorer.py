@@ -1,7 +1,7 @@
 """
 Confidence scorer for the Validate stage - calculates confidence scores from debate results.
 """
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 
 logger = logging.getLogger(__name__)

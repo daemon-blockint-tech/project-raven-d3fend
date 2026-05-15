@@ -203,6 +203,12 @@ class D3FENDCatalogLoader:
             "CWE-416": ["use-after-free", "memory", "dangling"],
             "CWE-772": ["resource", "leak", "memory", "unreachable"],
             "CWE-835": ["infinite", "loop", "resource", "exhaustion"],
+            "CWE-295": ["certificate", "validation", "trust", "identity", "authentication"],
+            "CWE-296": ["certificate", "authentication", "identity", "bypass"],
+            "CWE-297": ["certificate", "validation", "spoofing", "man-in-middle"],
+            "CWE-326": ["encryption", "key", "strength", "cryptography", "weak"],
+            "CWE-523": ["certificate", "transmission", "exposure", "credential"],
+            "CWE-649": ["reliance", "obfuscation", "authentication", "crypto"],
         }
         return mapping.get(cwe_id.upper(), [])
 
@@ -226,5 +232,11 @@ class D3FENDCatalogLoader:
             "CWE-522": ["Harden"],
             "CWE-476": ["Harden"],
             "CWE-416": ["Harden"],
+            "CWE-295": ["Harden", "Detect"],
+            "CWE-296": ["Harden"],
+            "CWE-297": ["Harden", "Detect"],
+            "CWE-326": ["Harden"],
+            "CWE-523": ["Harden", "Isolate"],
+            "CWE-649": ["Harden"],
         }
         return mapping.get(cwe_id.upper(), ["Harden", "Detect"])

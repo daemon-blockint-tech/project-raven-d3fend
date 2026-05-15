@@ -49,14 +49,21 @@ class ModelRouter:
         "gpt-4o": ModelConfig("openai/gpt-4o", ModelTier.FRONTIER, 5.0, 15.0, 128000, ["reasoning", "code", "vision"]),
         "claude-3.5-sonnet": ModelConfig("anthropic/claude-3.5-sonnet", ModelTier.FRONTIER, 3.0, 15.0, 200000, ["reasoning", "code", "long-context"]),
         "gemini-pro": ModelConfig("google/gemini-pro", ModelTier.FRONTIER, 3.5, 10.5, 128000, ["reasoning", "vision", "multimodal"]),
+        "claude-sonnet-4.6": ModelConfig("anthropic/claude-sonnet-4.6", ModelTier.FRONTIER, 3.0, 15.0, 200000, ["reasoning", "code", "long-context"]),
+        "claude-opus-4.7": ModelConfig("anthropic/claude-opus-4.7", ModelTier.FRONTIER, 15.0, 75.0, 200000, ["reasoning", "code", "long-context"]),
+        "hy3-preview": ModelConfig("tencent/hy3-preview", ModelTier.FRONTIER, 1.0, 3.0, 128000, ["reasoning", "code"]),
 
         # Balanced tier
         "gpt-4o-mini": ModelConfig("openai/gpt-4o-mini", ModelTier.BALANCED, 0.15, 0.6, 128000, ["code", "fast"]),
         "claude-3-haiku": ModelConfig("anthropic/claude-3-haiku", ModelTier.BALANCED, 0.25, 1.25, 200000, ["code", "long-context"]),
+        "claude-haiku-4.5": ModelConfig("anthropic/claude-haiku-4.5", ModelTier.BALANCED, 0.25, 1.25, 200000, ["code", "fast"]),
+        "kimi-k2.6": ModelConfig("moonshotai/kimi-k2.6", ModelTier.BALANCED, 0.5, 2.0, 128000, ["code", "reasoning"]),
 
         # Distilled tier
         "llama-3-8b": ModelConfig("meta-llama/llama-3-8b-instruct", ModelTier.DISTILLED, 0.05, 0.15, 8192, ["fast", "simple"]),
         "mistral-7b": ModelConfig("mistralai/mistral-7b-instruct", ModelTier.DISTILLED, 0.05, 0.15, 8192, ["fast", "simple"]),
+        "deepseek-v4-flash": ModelConfig("deepseek/deepseek-v4-flash", ModelTier.DISTILLED, 0.05, 0.15, 128000, ["fast", "simple", "code"]),
+        "owl-alpha": ModelConfig("openrouter/owl-alpha", ModelTier.DISTILLED, 0.05, 0.15, 128000, ["fast", "simple"]),
     }
 
     def __init__(
@@ -76,11 +83,11 @@ class ModelRouter:
         self.spent_usd = 0.0
         self.request_log: List[Dict] = []
 
-        # Fallback chains per tier
+        # Fallback chains per tier (updated with all registered models)
         self.fallback_chains = {
-            ModelTier.FRONTIER: ["gpt-4o", "claude-3.5-sonnet", "gemini-pro"],
-            ModelTier.BALANCED: ["gpt-4o-mini", "claude-3-haiku", "llama-3-8b"],
-            ModelTier.DISTILLED: ["llama-3-8b", "mistral-7b"],
+            ModelTier.FRONTIER: ["claude-sonnet-4.6", "claude-opus-4.7", "hy3-preview", "gpt-4o", "claude-3.5-sonnet", "gemini-pro"],
+            ModelTier.BALANCED: ["claude-haiku-4.5", "kimi-k2.6", "gpt-4o-mini", "claude-3-haiku"],
+            ModelTier.DISTILLED: ["deepseek-v4-flash", "owl-alpha", "llama-3-8b", "mistral-7b"],
         }
 
         logger.info(f"ModelRouter initialized with {len(self.models)} models, budget ${budget_usd}")
@@ -140,9 +147,9 @@ class ModelRouter:
         )
         return cheapest.model_id
 
-    def _can_afford(self, cfg: ModelConfig) -> bool:
+    def _can_afford(self, cfg: ModelConfig, estimated_tokens: int = 2000) -> bool:
         """Check if remaining budget can afford at least one request."""
-        estimated_cost = (cfg.cost_per_1k_input + cfg.cost_per_1k_output) / 1000 * 4000  # estimate 4k tokens
+        estimated_cost = (cfg.cost_per_1k_input + cfg.cost_per_1k_output) / 1000 * estimated_tokens
         return (self.spent_usd + estimated_cost) <= self.budget_usd
 
     def track_cost(self, model_id: str, input_tokens: int, output_tokens: int):

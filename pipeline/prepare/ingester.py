@@ -45,6 +45,11 @@ class CodebaseIngester:
         repo_name = repo_url.split("/")[-1].replace(".git", "")
         repo_path = self.work_dir / repo_name
         
+        # Remove existing directory if present
+        if repo_path.exists():
+            logger.info(f"Removing existing directory: {repo_path}")
+            shutil.rmtree(repo_path)
+        
         # Clone repository
         logger.info(f"Cloning repository: {repo_url}")
         try:
@@ -109,7 +114,7 @@ class CodebaseIngester:
         # Copy to work directory
         if repo_path.exists():
             shutil.rmtree(repo_path)
-        shutil.copytree(local_path, repo_path)
+        shutil.copytree(local_path, repo_path, symlinks=True, ignore_dangling_symlinks=True)
         
         # Check if it's a git repository
         is_git = (repo_path / ".git").exists()

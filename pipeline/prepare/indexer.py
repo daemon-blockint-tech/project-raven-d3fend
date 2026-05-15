@@ -46,7 +46,7 @@ class LanguageIndexer:
         ast_data = {}
         for lang, files in languages.items():
             if lang in ["python", "javascript", "typescript"]:
-                ast_data[lang] = self._build_asts(files)
+                ast_data[lang] = self._build_asts(files, lang)
         
         # Build call graph
         call_graph = self._build_call_graph(repo_path, languages)
@@ -136,8 +136,8 @@ class LanguageIndexer:
         """Detect if file is Solidity."""
         return file_path.endswith(".sol")
     
-    def _build_asts(self, files: List[str]) -> Dict[str, Any]:
-        """Build ASTs for Python files."""
+    def _build_asts(self, files: List[str], language: str = "python") -> Dict[str, Any]:
+        """Build ASTs for files. Uses Python ast for .py, regex-based extraction for JS/TS."""
         asts = {}
         
         for file_path in files:
@@ -145,16 +145,69 @@ class LanguageIndexer:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     source = f.read()
                 
-                tree = ast.parse(source)
-                asts[file_path] = {
-                    "functions": self._extract_functions(tree),
-                    "classes": self._extract_classes(tree),
-                    "imports": self._extract_imports(tree)
-                }
+                if language == "python":
+                    tree = ast.parse(source)
+                    asts[file_path] = {
+                        "functions": self._extract_functions(tree),
+                        "classes": self._extract_classes(tree),
+                        "imports": self._extract_imports(tree)
+                    }
+                elif language in ("javascript", "typescript"):
+                    asts[file_path] = self._extract_js_ts_symbols(source, file_path)
+            except SyntaxError as e:
+                logger.warning(f"Syntax error parsing {file_path}: {e}")
             except Exception as e:
                 logger.warning(f"Failed to parse AST for {file_path}: {e}")
         
         return asts
+    
+    def _extract_js_ts_symbols(self, source: str, file_path: str) -> Dict[str, Any]:
+        """Extract functions, classes, and imports from JS/TS using regex."""
+        import re
+        
+        functions = []
+        classes = []
+        imports = []
+        
+        # Extract imports
+        for match in re.finditer(r'^(?:import\s+.*?from\s+[\'"]([^\'"]+)[\'"]|import\s+[\'"]([^\'"]+)[\'"])', source, re.MULTILINE):
+            imports.append(match.group(1) or match.group(2))
+        
+        # Extract function declarations (named, arrow, async)
+        for match in re.finditer(r'(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)', source):
+            params = [p.strip().split(':')[0].split('=')[0].strip() for p in match.group(2).split(',') if p.strip()]
+            functions.append({
+                "name": match.group(1),
+                "params": params,
+                "async": "async" in match.group(0),
+                "export": "export" in match.group(0)
+            })
+        
+        # Extract arrow functions assigned to variables
+        for match in re.finditer(r'(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\(([^)]*)\)\s*=>', source):
+            params = [p.strip().split(':')[0].split('=')[0].strip() for p in match.group(2).split(',') if p.strip()]
+            functions.append({
+                "name": match.group(1),
+                "params": params,
+                "type": "arrow",
+                "async": "async" in match.group(0),
+                "export": "export" in match.group(0)
+            })
+        
+        # Extract class declarations
+        for match in re.finditer(r'(?:export\s+)?(?:abstract\s+)?class\s+(\w+)(?:\s+extends\s+(\w+))?(?:\s+implements\s+([\w,\s]+))?', source):
+            classes.append({
+                "name": match.group(1),
+                "extends": match.group(2),
+                "implements": [i.strip() for i in match.group(3).split(',')] if match.group(3) else [],
+                "export": "export" in match.group(0)
+            })
+        
+        return {
+            "functions": functions,
+            "classes": classes,
+            "imports": imports
+        }
     
     def _extract_functions(self, tree: ast.AST) -> List[Dict[str, Any]]:
         """Extract function definitions from AST."""
@@ -263,7 +316,8 @@ class LanguageIndexer:
         # Common entry point patterns
         entry_point_patterns = {
             "python": ["main(", "if __name__ == '__main__'", "app.run(", "Flask(", "FastAPI("],
-            "javascript": ["app.listen(", "express(", "server.listen("],
+            "javascript": ["app.listen(", "express(", "server.listen(", "createServer("],
+            "typescript": ["app.listen(", "express(", "server.listen(", "createServer(", "Bun.serve(", "new Hono("],
             "rust": ["fn main(", "#[main]"],
             "solidity": ["function ", "constructor("]
         }
